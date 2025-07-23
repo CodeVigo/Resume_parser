@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Campus Recruitment Platform
 
 A comprehensive MERN stack application for campus recruitment with AI-powered resume matching and scoring.
@@ -99,7 +100,75 @@ docker-compose up -d --build
 
 The application will be available at:
 - **Frontend**: http://localhost:3000
-- **Backend API**: http://localhost:5000
+- **Backend API**: http://localhost:5000# Campus Recruitment Platform
+
+A comprehensive MERN stack application for campus recruitment with AI-powered resume matching and scoring.
+
+## 🚀 Features
+
+### For Students
+- **Smart Resume Upload & Analysis**: Upload resumes with automatic parsing and skill extraction
+- **AI-Powered Job Matching**: Get matched with relevant opportunities based on skills and profile
+- **Resume Scoring**: See how your resume scores against specific job requirements
+- **Job Search & Discovery**: Browse and search for internships and full-time positions
+- **Profile Management**: Manage your academic and professional information
+
+### For Recruiters
+- **Advanced Candidate Search**: Find qualified candidates with powerful filtering options
+- **Automated Resume Screening**: AI-powered resume scoring and ranking
+- **Job Posting Management**: Create, edit, and manage job postings
+- **Candidate Analytics**: Get insights into candidate quality and matching scores
+- **Resume Download**: Access and download matched candidate resumes
+
+### Technical Features
+- **OAuth & Local Authentication**: Google OAuth and email/password login
+- **Real-time Processing**: Background resume processing with status updates
+- **Secure File Storage**: GridFS for resume storage with download protection
+- **Redis Caching**: Cached parsing and scoring results for better performance
+- **Responsive Design**: Mobile-first design with Tailwind CSS
+- **Docker Deployment**: Complete containerized deployment setup
+
+## 🛠️ Tech Stack
+
+### Frontend
+- **React 18** with Vite
+- **Tailwind CSS** for styling
+- **React Router** for routing
+- **Axios** for API calls
+- **Lucide React** for icons
+
+### Backend
+- **Node.js** with Express.js
+- **MongoDB** with Mongoose ODM
+- **GridFS** for file storage
+- **Redis** for caching
+- **Passport.js** for authentication
+- **JWT** with HttpOnly cookies
+- **Multer** for file uploads
+
+### APIs & Services
+- **Sovren API** for resume parsing (with mock fallback)
+- **Google OAuth 2.0** for authentication
+
+### Infrastructure
+- **Docker & Docker Compose**
+- **Nginx** for frontend serving
+- **MongoDB** for primary database
+- **Redis** for caching
+
+## 📋 Prerequisites
+
+- **Node.js** 18+ and npm
+- **Docker** and Docker Compose
+- **Git**
+
+## 🚀 Quick Start
+
+### 1. Clone the Repository
+```bash
+git clone <repository-url>
+cd campus-recruitment-app
+
 - **MongoDB**: localhost:27017
 - **Redis**: localhost:6379
 
@@ -376,3 +445,6 @@ For support and questions:
 - **MongoDB Atlas** for database hosting
 - **Tailwind CSS** for the beautiful UI components
 - **React** and **Express** communities for excellent documentation
+=======
+# Resume_parser
+>>>>>>> origin/main
