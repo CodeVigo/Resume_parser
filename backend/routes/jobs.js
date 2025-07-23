@@ -1,199 +1,136 @@
-import express from 'express';
-import Job from '../models/Job.js';
-import { authenticateJWT, requireRole } from '../middleware/auth.js';
+// backend/routes/jobs.js
+
+import express from "express";
+import Job from "../models/Job.js";
+import { authenticateJWT, requireRole } from "../middleware/auth.js";
 
 const router = express.Router();
 
-// Get all active jobs (for students)
-router.get('/', authenticateJWT, async (req, res) => {
+/**
+ * GET /api/jobs
+ * Fetch all active jobs with optional pagination.
+ * Query parameters:
+ *   - page (default: 1)
+ *   - limit (default: 0 for no limit)
+ * Response: { jobs: [...], total: number }
+ */
+router.get("/", async (req, res) => {
   try {
-    const { page = 1, limit = 10, search, jobType, location } = req.query;
-    
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 0;
     const query = { isActive: true };
-    
-    // Search filters
-    if (search) {
-      query.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { company: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
-    }
-    
-    if (jobType) {
-      query.jobType = jobType;
-    }
-    
-    if (location) {
-      query.location = { $regex: location, $options: 'i' };
-    }
-    
-    const jobs = await Job.find(query)
-      .populate('recruiter', 'name company')
-      .sort({ createdAt: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
-    
+
     const total = await Job.countDocuments(query);
-    
-    res.json({
-      jobs,
-      totalPages: Math.ceil(total / limit),
-      currentPage: page,
-      total
-    });
-  } catch (error) {
-    console.error('Get jobs error:', error);
-    res.status(500).json({ message: 'Failed to fetch jobs' });
+
+    let cursor = Job.find(query).sort({ createdAt: -1 }).select("-__v");
+
+    if (limit > 0) {
+      const skip = (page - 1) * limit;
+      cursor = cursor.skip(skip).limit(limit);
+    }
+
+    const jobs = await cursor;
+    return res.json({ jobs, total });
+  } catch (err) {
+    console.error("Fetch jobs error:", err);
+    return res.status(500).json({ message: "Failed to fetch jobs" });
   }
 });
 
-// Get job by ID
-router.get('/:id', authenticateJWT, async (req, res) => {
+// GET /api/jobs/my/jobs — Fetch only this recruiter’s postings
+router.get(
+  "/my/jobs",
+  authenticateJWT,
+  requireRole(["recruiter"]),
+  async (req, res) => {
+    try {
+      const jobs = await Job.find({ recruiter: req.user._id })
+        .sort({ createdAt: -1 })
+        .select("-__v");
+      return res.json({ jobs, total: jobs.length });
+    } catch (err) {
+      console.error("Fetch my jobs error:", err);
+      return res.status(500).json({ message: "Failed to fetch your jobs" });
+    }
+  }
+);
+
+// GET /api/jobs/:id — Fetch single job by ID
+router.get("/:id", authenticateJWT, async (req, res) => {
   try {
-    const job = await Job.findById(req.params.id)
-      .populate('recruiter', 'name company email');
-    
+    const job = await Job.findById(req.params.id).select("-__v");
     if (!job) {
-      return res.status(404).json({ message: 'Job not found' });
+      return res.status(404).json({ message: "Job not found" });
     }
-    
-    res.json(job);
-  } catch (error) {
-    console.error('Get job error:', error);
-    res.status(500).json({ message: 'Failed to fetch job' });
+    return res.json(job);
+  } catch (err) {
+    console.error("Fetch job detail error:", err);
+    return res.status(500).json({ message: "Failed to fetch job detail" });
   }
 });
 
-// Create new job (recruiters only)
-router.post('/', authenticateJWT, requireRole(['recruiter']), async (req, res) => {
-  try {
-    const {
-      title,
-      company,
-      description,
-      requirements,
-      location,
-      salary,
-      jobType,
-      requiredSkills,
-      scoreThreshold,
-      deadlineDate
-    } = req.body;
-    
-    // Validation
-    if (!title || !company || !description || !requirements || !location) {
-      return res.status(400).json({
-        message: 'Title, company, description, requirements, and location are required'
-      });
+// POST /api/jobs — Create new job (recruiters only)
+router.post(
+  "/",
+  authenticateJWT,
+  requireRole(["recruiter"]),
+  async (req, res) => {
+    try {
+      const data = { ...req.body, recruiter: req.user._id };
+      const job = await Job.create(data);
+      return res.status(201).json(job);
+    } catch (err) {
+      console.error("Create job error:", err);
+      return res.status(400).json({ message: "Invalid job data" });
     }
-    
-    if (!requiredSkills || requiredSkills.length === 0) {
-      return res.status(400).json({
-        message: 'At least one required skill must be specified'
-      });
-    }
-    
-    const job = new Job({
-      title,
-      company,
-      description,
-      requirements,
-      location,
-      salary,
-      jobType: jobType || 'full-time',
-      requiredSkills,
-      scoreThreshold: scoreThreshold || 60,
-      recruiter: req.user._id,
-      deadlineDate: deadlineDate ? new Date(deadlineDate) : null
-    });
-    
-    await job.save();
-    
-    res.status(201).json({
-      message: 'Job created successfully',
-      job
-    });
-  } catch (error) {
-    console.error('Create job error:', error);
-    res.status(500).json({ message: 'Failed to create job' });
   }
-});
+);
 
-// Update job (recruiters only, own jobs)
-router.put('/:id', authenticateJWT, requireRole(['recruiter']), async (req, res) => {
-  try {
-    const job = await Job.findById(req.params.id);
-    
-    if (!job) {
-      return res.status(404).json({ message: 'Job not found' });
+// PUT /api/jobs/:id — Update job (recruiters only & own jobs)
+router.put(
+  "/:id",
+  authenticateJWT,
+  requireRole(["recruiter"]),
+  async (req, res) => {
+    try {
+      const job = await Job.findById(req.params.id);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      if (job.recruiter.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
+      Object.assign(job, req.body);
+      await job.save();
+      return res.json(job);
+    } catch (err) {
+      console.error("Update job error:", err);
+      return res.status(400).json({ message: "Invalid update data" });
     }
-    
-    // Check if user owns this job
-    if (job.recruiter.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: 'Not authorized to update this job' });
-    }
-    
-    const updates = req.body;
-    Object.assign(job, updates);
-    
-    await job.save();
-    
-    res.json({
-      message: 'Job updated successfully',
-      job
-    });
-  } catch (error) {
-    console.error('Update job error:', error);
-    res.status(500).json({ message: 'Failed to update job' });
   }
-});
+);
 
-// Delete job (recruiters only, own jobs)
-router.delete('/:id', authenticateJWT, requireRole(['recruiter']), async (req, res) => {
-  try {
-    const job = await Job.findById(req.params.id);
-    
-    if (!job) {
-      return res.status(404).json({ message: 'Job not found' });
+// DELETE /api/jobs/:id — Delete job (recruiters only & own jobs)
+router.delete(
+  "/:id",
+  authenticateJWT,
+  requireRole(["recruiter"]),
+  async (req, res) => {
+    try {
+      const job = await Job.findById(req.params.id);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      if (job.recruiter.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
+      await job.remove();
+      return res.json({ message: "Job deleted" });
+    } catch (err) {
+      console.error("Delete job error:", err);
+      return res.status(500).json({ message: "Failed to delete job" });
     }
-    
-    // Check if user owns this job
-    if (job.recruiter.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: 'Not authorized to delete this job' });
-    }
-    
-    await Job.findByIdAndDelete(req.params.id);
-    
-    res.json({ message: 'Job deleted successfully' });
-  } catch (error) {
-    console.error('Delete job error:', error);
-    res.status(500).json({ message: 'Failed to delete job' });
   }
-});
-
-// Get recruiter's jobs
-router.get('/my/jobs', authenticateJWT, requireRole(['recruiter']), async (req, res) => {
-  try {
-    const { page = 1, limit = 10 } = req.query;
-    
-    const jobs = await Job.find({ recruiter: req.user._id })
-      .sort({ createdAt: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
-    
-    const total = await Job.countDocuments({ recruiter: req.user._id });
-    
-    res.json({
-      jobs,
-      totalPages: Math.ceil(total / limit),
-      currentPage: page,
-      total
-    });
-  } catch (error) {
-    console.error('Get my jobs error:', error);
-    res.status(500).json({ message: 'Failed to fetch your jobs' });
-  }
-});
+);
 
 export default router;

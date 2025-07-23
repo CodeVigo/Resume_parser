@@ -1,259 +1,236 @@
-import express from 'express';
-import Resume from '../models/Resume.js';
-import Job from '../models/Job.js';
-import User from '../models/User.js';
-import { authenticateJWT, requireRole } from '../middleware/auth.js';
-import scoringService from '../services/scoringService.js';
-import { cacheService } from '../services/redisClient.js';
+// backend/routes/candidates.js
+import express from "express";
+import Resume from "../models/Resume.js";
+import Job from "../models/Job.js";
+import User from "../models/User.js";
+import { authenticateJWT, requireRole } from "../middleware/auth.js";
+import scoringService from "../services/scoringService.js";
+import { sendShortlistEmail } from "../services/emailService.js";
 
 const router = express.Router();
 
-// Get matched candidates for a job (recruiters only)
-router.get('/job/:jobId', authenticateJWT, requireRole(['recruiter']), async (req, res) => {
-  try {
-    const { jobId } = req.params;
-    const { page = 1, limit = 10, minScore = 0 } = req.query;
-    
-    // Verify job belongs to recruiter
-    const job = await Job.findById(jobId);
-    if (!job) {
-      return res.status(404).json({ message: 'Job not found' });
-    }
-    
-    if (job.recruiter.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: 'Not authorized to view candidates for this job' });
-    }
-    
-    // Get all completed resumes
-    const resumes = await Resume.find({ 
-      processingStatus: 'completed',
-      parsedData: { $exists: true }
-    })
-    .populate('student', 'name email university major graduationYear')
-    .sort({ createdAt: -1 });
-    
-    if (resumes.length === 0) {
-      return res.json({
-        candidates: [],
-        totalPages: 0,
-        currentPage: page,
-        total: 0
+/**
+ * GET /api/candidates/my/scores
+ * — Student dashboard: return this student's resume jobScores
+ */
+router.get(
+  "/my/scores",
+  authenticateJWT,
+  requireRole(["student"]),
+  async (req, res) => {
+    try {
+      const resume = await Resume.findOne({ student: req.user._id }).populate({
+        path: "jobScores.jobId",
+        select: "title company scoreThreshold",
       });
-    }
-    
-    // Calculate scores for all resumes
-    const scoredCandidates = [];
-    
-    for (const resume of resumes) {
-      try {
-        const resumeData = {
-          resumeId: resume._id,
-          parsedData: resume.parsedData,
-          student: resume.student
-        };
-        
-        const score = await scoringService.calculateJobMatchScore(resumeData, job);
-        
-        if (score.score >= minScore && score.score >= job.scoreThreshold) {
-          scoredCandidates.push({
-            resumeId: resume._id,
-            student: resume.student,
-            score: score.score,
-            skillMatches: score.skillMatches,
-            bonusFactors: score.bonusFactors,
-            calculatedAt: score.calculatedAt,
-            filename: resume.filename,
-            originalName: resume.originalName,
-            uploadedAt: resume.createdAt
-          });
-          
-          // Update resume with job score
-          const existingScoreIndex = resume.jobScores.findIndex(
-            js => js.jobId.toString() === jobId
-          );
-          
-          if (existingScoreIndex >= 0) {
-            resume.jobScores[existingScoreIndex] = {
-              jobId: job._id,
-              score: score.score,
-              skillMatches: score.skillMatches,
-              calculatedAt: score.calculatedAt
-            };
-          } else {
-            resume.jobScores.push({
-              jobId: job._id,
-              score: score.score,
-              skillMatches: score.skillMatches,
-              calculatedAt: score.calculatedAt
-            });
-          }
-          
-          await resume.save();
-        }
-      } catch (scoreError) {
-        console.error(`Error scoring resume ${resume._id}:`, scoreError);
-      }
-    }
-    
-    // Sort by score (highest first)
-    scoredCandidates.sort((a, b) => b.score - a.score);
-    
-    // Pagination
-    const startIndex = (page - 1) * limit;
-    const endIndex = startIndex + parseInt(limit);
-    const paginatedCandidates = scoredCandidates.slice(startIndex, endIndex);
-    
-    res.json({
-      candidates: paginatedCandidates,
-      totalPages: Math.ceil(scoredCandidates.length / limit),
-      currentPage: parseInt(page),
-      total: scoredCandidates.length,
-      jobInfo: {
-        title: job.title,
-        company: job.company,
-        scoreThreshold: job.scoreThreshold
-      }
-    });
-  } catch (error) {
-    console.error('Get candidates error:', error);
-    res.status(500).json({ message: 'Failed to fetch candidates' });
-  }
-});
 
-// Get candidate detail (recruiters only)
-router.get('/detail/:resumeId', authenticateJWT, requireRole(['recruiter']), async (req, res) => {
-  try {
-    const { resumeId } = req.params;
-    const { jobId } = req.query;
-    
-    const resume = await Resume.findById(resumeId)
-      .populate('student', 'name email university major graduationYear skills');
-    
-    if (!resume) {
-      return res.status(404).json({ message: 'Resume not found' });
-    }
-    
-    let jobScore = null;
-    if (jobId) {
-      // Get score for specific job
-      const job = await Job.findById(jobId);
-      if (job) {
-        const resumeData = {
-          resumeId: resume._id,
-          parsedData: resume.parsedData,
-          student: resume.student
-        };
-        jobScore = await scoringService.calculateJobMatchScore(resumeData, job);
+      if (!resume) {
+        return res.status(404).json({ message: "No resume found" });
       }
-    }
-    
-    res.json({
-      resume: {
-        id: resume._id,
-        filename: resume.originalName,
-        uploadedAt: resume.createdAt,
-        processingStatus: resume.processingStatus
-      },
-      student: resume.student,
-      parsedData: resume.parsedData,
-      jobScore,
-      allJobScores: resume.jobScores
-    });
-  } catch (error) {
-    console.error('Get candidate detail error:', error);
-    res.status(500).json({ message: 'Failed to fetch candidate details' });
-  }
-});
 
-// Get all candidates overview (recruiters only)
-router.get('/overview', authenticateJWT, requireRole(['recruiter']), async (req, res) => {
-  try {
-    const { search, university, major, minScore = 0 } = req.query;
-    
-    // Build search query
-    const searchQuery = {};
-    if (search) {
-      searchQuery.$or = [
-        { 'name': { $regex: search, $options: 'i' } },
-        { 'email': { $regex: search, $options: 'i' } }
-      ];
-    }
-    if (university) {
-      searchQuery.university = { $regex: university, $options: 'i' };
-    }
-    if (major) {
-      searchQuery.major = { $regex: major, $options: 'i' };
-    }
-    
-    // Get students with resumes
-    const students = await User.find({
-      role: 'student',
-      resumeId: { $exists: true },
-      ...searchQuery
-    })
-    .populate('resumeId')
-    .select('name email university major graduationYear resumeId');
-    
-    const candidates = students
-      .filter(student => student.resumeId && student.resumeId.processingStatus === 'completed')
-      .map(student => ({
-        studentId: student._id,
-        name: student.name,
-        email: student.email,
-        university: student.university,
-        major: student.major,
-        graduationYear: student.graduationYear,
-        resumeId: student.resumeId._id,
-        uploadedAt: student.resumeId.createdAt,
-        skills: student.resumeId.parsedData?.skills?.map(s => s.name) || []
+      const scores = resume.jobScores.map((js) => ({
+        job: js.jobId,
+        score: js.score,
+        meetsThreshold: js.score >= js.jobId.scoreThreshold,
+        calculatedAt: js.calculatedAt,
       }));
-    
-    res.json({
-      candidates,
-      total: candidates.length
-    });
-  } catch (error) {
-    console.error('Get candidates overview error:', error);
-    res.status(500).json({ message: 'Failed to fetch candidates overview' });
-  }
-});
 
-// Get resume scores for student dashboard
-router.get('/my/scores', authenticateJWT, requireRole(['student']), async (req, res) => {
-  try {
-    const resume = await Resume.findOne({ student: req.user._id })
-      .populate({
-        path: 'jobScores.jobId',
-        select: 'title company location jobType scoreThreshold createdAt'
-      });
-    
-    if (!resume) {
-      return res.status(404).json({ message: 'No resume found' });
+      return res.json({ resumeId: resume._id, scores });
+    } catch (err) {
+      console.error("Get my scores error:", err);
+      return res
+        .status(500)
+        .json({ message: "Failed to fetch your ATS scores" });
     }
-    
-    // Filter out null job references and sort by score
-    const validScores = resume.jobScores
-      .filter(score => score.jobId)
-      .sort((a, b) => b.score - a.score);
-    
-    res.json({
-      resumeId: resume._id,
-      processingStatus: resume.processingStatus,
-      totalJobs: validScores.length,
-      averageScore: validScores.length > 0 ? 
-        Math.round(validScores.reduce((sum, score) => sum + score.score, 0) / validScores.length) : 0,
-      scores: validScores.map(score => ({
-        job: score.jobId,
-        score: score.score,
-        skillMatches: score.skillMatches,
-        calculatedAt: score.calculatedAt,
-        meetsThreshold: score.score >= score.jobId.scoreThreshold
-      }))
-    });
-  } catch (error) {
-    console.error('Get my scores error:', error);
-    res.status(500).json({ message: 'Failed to fetch your scores' });
   }
-});
+);
+
+/**
+ * GET /api/candidates/job/:jobId
+ * — Recruiter: fetch completed resumes that meet the job’s threshold
+ */
+router.get(
+  "/job/:jobId",
+  authenticateJWT,
+  requireRole(["recruiter"]),
+  async (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const job = await Job.findById(jobId);
+      if (!job || job.recruiter.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
+
+      const resumes = await Resume.find({
+        processingStatus: "completed",
+        parsedData: { $exists: true },
+      }).populate("student", "name email university major");
+
+      const candidates = [];
+      for (const r of resumes) {
+        const { score, skillMatches, bonusFactors, calculatedAt } =
+          await scoringService.calculateJobMatchScore(
+            { resumeId: r._id, parsedData: r.parsedData },
+            job
+          );
+        if (score >= job.scoreThreshold) {
+          candidates.push({
+            resumeId: r._id,
+            student: r.student,
+            score,
+            skillMatches,
+            bonusFactors,
+            calculatedAt,
+          });
+        }
+      }
+
+      return res.json({ candidates });
+    } catch (err) {
+      console.error("Get candidates error:", err);
+      return res
+        .status(500)
+        .json({ message: "Error fetching matched candidates" });
+    }
+  }
+);
+
+/**
+ * POST /api/candidates/shortlist
+ * — Recruiter: mark a candidate as shortlisted and send email
+ */
+router.post(
+  "/shortlist",
+  authenticateJWT,
+  requireRole(["recruiter"]),
+  async (req, res) => {
+    try {
+      const { jobId, resumeId } = req.body;
+      const job = await Job.findById(jobId);
+      const resume = await Resume.findById(resumeId).populate("student");
+      if (!job || job.recruiter.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
+      if (!resume) {
+        return res.status(404).json({ message: "Resume not found" });
+      }
+
+      // Mark shortlisted flag in resume.jobScores
+      const idx = resume.jobScores.findIndex(
+        (js) => js.jobId.toString() === jobId
+      );
+      if (idx >= 0) resume.jobScores[idx].shortlisted = true;
+      else
+        resume.jobScores.push({
+          jobId: job._id,
+          score: 0,
+          skillMatches: [],
+          shortlisted: true,
+        });
+
+      await resume.save();
+      await sendShortlistEmail(resume.student.email, job.title, job._id);
+
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Shortlist error:", err);
+      return res.status(500).json({ message: "Error shortlisting candidate" });
+    }
+  }
+);
+
+/**
+ * POST /api/candidates/apply
+ * — Student: apply to a job
+ */
+router.post(
+  "/apply",
+  authenticateJWT,
+  requireRole(["student"]),
+  async (req, res) => {
+    try {
+      const { jobId } = req.body;
+      const job = await Job.findById(jobId);
+      if (!job) return res.status(404).json({ message: "Job not found" });
+
+      job.applicationsCount = (job.applicationsCount || 0) + 1;
+      await job.save();
+
+      await User.findByIdAndUpdate(req.user._id, {
+        $addToSet: { appliedJobs: job._id },
+      });
+
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Apply error:", err);
+      return res.status(500).json({ message: "Failed to apply" });
+    }
+  }
+);
+
+router.get(
+  "/overview",
+  authenticateJWT,
+  requireRole(["recruiter"]),
+  async (req, res) => {
+    try {
+      const { page = 1, limit = 10, search = "" } = req.query;
+      const skip = (page - 1) * limit;
+
+      // Find students who have a completed resume
+      const matchStudents = await User.find({
+        role: "student",
+        resumeId: { $exists: true },
+        // optional text search on name/email
+        $or: [
+          { name: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } },
+        ],
+      })
+        .populate({
+          path: "resumeId",
+          match: { processingStatus: "completed" },
+          select: "parsedData createdAt",
+        })
+        .skip(parseInt(skip))
+        .limit(parseInt(limit));
+
+      // Filter out those whose resume isn’t completed
+      const candidates = matchStudents
+        .filter((u) => u.resumeId)
+        .map((u) => ({
+          studentId: u._id,
+          name: u.name,
+          email: u.email,
+          university: u.university,
+          major: u.major,
+          graduationYear: u.graduationYear,
+          resumeId: u.resumeId._id,
+          uploadedAt: u.resumeId.createdAt,
+          skills: u.resumeId.parsedData?.skills?.map((s) => s.name) || [],
+        }));
+
+      // Total count (no skip/limit)
+      const total = await User.countDocuments({
+        role: "student",
+        resumeId: { $exists: true },
+        $or: [
+          { name: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } },
+        ],
+      });
+
+      return res.json({
+        candidates,
+        total,
+        page: parseInt(page),
+        totalPages: Math.ceil(total / limit),
+      });
+    } catch (err) {
+      console.error("Overview error:", err);
+      res.status(500).json({ message: "Failed to fetch candidates overview" });
+    }
+  }
+);
 
 export default router;

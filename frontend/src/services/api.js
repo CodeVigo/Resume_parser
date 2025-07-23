@@ -1,5 +1,3 @@
-// src/services/api.js
-
 import axios from "axios";
 
 const API_BASE_URL =
@@ -8,61 +6,67 @@ const API_BASE_URL =
 const api = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,
-  headers: {
-    "Content-Type": "application/json",
-  },
+  headers: { "Content-Type": "application/json" },
 });
 
-// Request interceptor
-api.interceptors.request.use(
-  (config) => {
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
-  }
-);
-
-// Response interceptor for handling token refresh
+// ——— Auth token refresh interceptor ———
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    const originalRequest = error.config;
-
-    if (error.response?.status === 401 && !originalRequest._retry) {
-      originalRequest._retry = true;
-
+    const original = error.config;
+    if (error.response?.status === 401 && !original._retry) {
+      original._retry = true;
       try {
         await api.post("/auth/refresh");
-        return api(originalRequest);
-      } catch (refreshError) {
-        // Redirect to login if refresh fails
+        return api(original);
+      } catch {
         window.location.href = "/login";
-        return Promise.reject(refreshError);
       }
     }
-
     return Promise.reject(error);
   }
 );
 
-// ——— PROFILE ENDPOINT HELPERS ———
+// ——— AUTH ———
+export const register = (data) => api.post("/auth/register", data);
+export const login = (data) => api.post("/auth/login", data);
+export const logout = () => api.post("/auth/logout");
+export const getProfile = () => api.get("/auth/me");
+export const updateProfile = (data) => api.put("/auth/me", data);
 
-/**
- * Fetch the current user's profile.
- * GET /api/profile
- * Returns: { user: { _id, name, email, ... } }
- */
-export const getProfile = () => api.get("/profile");
+// ——— RESUME ———
+export const uploadResume = (formData) =>
+  api.post("/upload/resume", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+export const getParsedResume = (id, jobId) =>
+  api.get(`/upload/resume/${id}/parsed${jobId ? `?jobId=${jobId}` : ""}`);
 
-/**
- * Update the current user's profile.
- * PUT /api/profile
- * Body: { name, email }
- * Returns: { success: boolean, user: {...updatedUser} }
- */
-export const updateProfile = (data) => api.put("/profile", data);
+// ——— JOBS ———
+export const getAllJobs = (page = 1, limit = 0) =>
+  api.get("/jobs", { params: { page, limit } });
+export const getJobById = (id) => api.get(`/jobs/${id}`);
+export const createJob = (data) => api.post("/jobs", data);
+export const updateJob = (id, data) => api.put(`/jobs/${id}`, data);
+export const deleteJob = (id) => api.delete(`/jobs/${id}`);
+export const getRecruiterJobs = (page = 1, limit = 0) =>
+  api.get("/jobs/my/jobs", { params: { page, limit } });
 
-// ——— DEFAULT EXPORT ———
+// ——— STUDENT ACTIONS ———
+export const saveJob = (jobId) => api.post(`/jobs/${jobId}/save`);
+export const getSavedJobs = () =>
+  api.get("/auth/me").then((res) => res.data.user.savedJobs || []);
+export const applyJob = (jobId) => api.post("/candidates/apply", { jobId });
+export const getAppliedJobs = () =>
+  api.get("/auth/me").then((res) => res.data.user.appliedJobs || []);
+
+// ——— CANDIDATES ———
+export const getJobCandidates = (jobId) => api.get(`/candidates/job/${jobId}`);
+export const getCandidateDetail = (rid, jobId) =>
+  api.get(`/candidates/detail/${rid}${jobId ? `?jobId=${jobId}` : ""}`);
+export const shortlistCandidate = (payload) =>
+  api.post("/candidates/shortlist", payload);
+export const getMyShortlists = () => api.get("/candidates/my/scores");
+export const getCandidatesOverview = () => api.get("/candidates/overview");
 
 export default api;
